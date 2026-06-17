@@ -1,0 +1,30 @@
+# Environment
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data and outputs (generated at runtime)
+data/downloads/*
+!data/downloads/.gitkeep
+data/extracted_text/*
+!data/extracted_text/.gitkeep
+data/indexes/*
+!data/indexes/.gitkeep
+data/runs/*
+!data/runs/.gitkeep
+data/*.db
+outputs/zip/*
+!outputs/zip/.gitkeep
+outputs/csv/*
+!outputs/csv/.gitkeep
+outputs/excel/*
+!outputs/excel/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

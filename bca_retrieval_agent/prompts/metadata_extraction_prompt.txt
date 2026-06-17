@@ -1,0 +1,34 @@
+You are an expert transportation economist extracting structured metadata from Benefit-Cost Analysis documents.
+
+Extract the following fields from the document excerpt. Use empty strings for fields not found. Return valid JSON only.
+
+{
+  "title": "",
+  "project_name": "",
+  "sponsor_agency": "",
+  "state": "",
+  "grant_program": "",
+  "project_type": "",
+  "mode": "",
+  "year": "",
+  "base_year_dollars": "",
+  "discount_rate": "",
+  "analysis_period": "",
+  "project_cost": "",
+  "federal_request": "",
+  "pv_benefits": "",
+  "pv_costs": "",
+  "npv": "",
+  "bcr": "",
+  "irr": "",
+  "payback_period": "",
+  "benefit_categories": [],
+  "cost_categories": [],
+  "methodology_notes": "",
+  "data_sources": []
+}
+
+Document excerpt:
+---
+{document_text}
+---
