@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+from config import GRANT_SEARCH_QUERIES
 from core.crawler import crawl_website
 from core.database import Database
 from core.search import parse_direct_urls, search_web
@@ -53,6 +54,29 @@ class SearchAgent:
                 )
                 results = crawl_results.results
                 errors.extend(crawl_results.errors)
+
+            elif config.search_mode == "grant_sources":
+                programs = config.grant_programs or list(GRANT_SEARCH_QUERIES.keys())
+                seen: set[str] = set()
+
+                for program in programs:
+                    for query in GRANT_SEARCH_QUERIES.get(program, []):
+                        if len(results) >= config.max_results:
+                            break
+                        logger.info("Grant search [%s]: %s", program, query)
+                        try:
+                            search_results = search_web(
+                                query=query,
+                                max_results=config.max_results,
+                                file_types=config.file_types,
+                            )
+                            for r in search_results.results:
+                                if r.url not in seen:
+                                    seen.add(r.url)
+                                    results.append(r)
+                            errors.extend(search_results.errors)
+                        except Exception as exc:
+                            errors.append(f"Search failed [{program}] {query}: {exc}")
 
             else:
                 search_results = search_web(

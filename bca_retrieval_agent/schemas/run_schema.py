@@ -19,6 +19,7 @@ class RunConfig(BaseModel):
     state_filter: Optional[str] = None
     package_name: Optional[str] = None
     direct_urls: list[str] = Field(default_factory=list)
+    grant_programs: list[str] = Field(default_factory=list)
 
 
 class RunLog(BaseModel):

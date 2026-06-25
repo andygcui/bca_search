@@ -4,10 +4,9 @@ import logging
 import re
 import time
 from typing import Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import urlparse
 
 import requests
-from bs4 import BeautifulSoup
 
 from config import (
     BING_SEARCH_API_KEY,
@@ -20,6 +19,18 @@ from schemas.search_result_schema import SearchResult, SearchResults
 logger = logging.getLogger(__name__)
 
 
+_QUERY_DIRECTIVES = re.compile(
+    r"^(find|get|retrieve|search\s+for|show\s+me|list|give\s+me)\s+",
+    re.IGNORECASE,
+)
+
+
+_GUIDE_EXCLUSIONS = (
+    '-"user guide" -"guidance document" -"how to" -manual -template -toolkit '
+    '-handbook -webinar -training -"fact sheet" -factsheet -"nofo" -"notice of funding"'
+)
+
+
 def _build_search_query(
     query: str,
     grant_program: Optional[str] = None,
@@ -27,12 +38,15 @@ def _build_search_query(
     state: Optional[str] = None,
     file_types: Optional[list[str]] = None,
     target_domain: Optional[str] = None,
+    include_filetype_operators: bool = True,
+    exclude_guides: bool = True,
 ) -> str:
     """Augment user query with BCA-specific search terms and filters."""
-    parts = [query.strip()]
+    clean = _QUERY_DIRECTIVES.sub("", query.strip())
+    parts = [clean]
 
-    if "benefit" not in query.lower() and "bca" not in query.lower():
-        parts.append('"benefit cost analysis" OR "benefit-cost analysis" OR BCA')
+    if "benefit" not in clean.lower():
+        parts.append('"benefit cost analysis" OR "benefit-cost analysis"')
 
     if grant_program and grant_program != "Other":
         parts.append(f'"{grant_program}"')
@@ -43,48 +57,69 @@ def _build_search_query(
     if state:
         parts.append(f'"{state}"')
 
-    if file_types:
-        for ft in file_types:
-            if ft.lower() in ("pdf", "docx", "xlsx", "xlsm"):
-                parts.append(f"filetype:{ft.lower()}")
+    # filetype: operators work in SerpAPI/Bing but break DuckDuckGo — caller controls this
+    if include_filetype_operators and file_types:
+        doc_types = [ft.lower() for ft in file_types if ft.lower() in ("pdf", "docx", "xlsx", "xlsm")]
+        if len(doc_types) == 1:
+            parts.append(f"filetype:{doc_types[0]}")
+        elif doc_types:
+            parts.append("(" + " OR ".join(f"filetype:{ft}" for ft in doc_types) + ")")
 
     if target_domain:
         domain = target_domain.replace("https://", "").replace("http://", "").strip("/")
         parts.append(f"site:{domain}")
 
+    if exclude_guides:
+        parts.append(_GUIDE_EXCLUSIONS)
+
     return " ".join(parts)
 
 
-def search_serpapi(query: str, max_results: int = 20) -> SearchResults:
-    """Search using SerpAPI."""
+def search_serpapi(query: str, max_results: int = 100) -> SearchResults:
+    """Search using SerpAPI with pagination to reach max_results."""
     results = SearchResults(query=query, mode="serpapi")
     if not SERPAPI_KEY:
         results.errors.append("SERPAPI_KEY not configured")
         return results
 
+    start = 0
+    page_size = 10  # Google returns 10 per page
     try:
-        resp = requests.get(
-            "https://serpapi.com/search",
-            params={
-                "q": query,
-                "api_key": SERPAPI_KEY,
-                "engine": "google",
-                "num": min(max_results, 100),
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        for item in data.get("organic_results", [])[:max_results]:
-            results.results.append(
-                SearchResult(
-                    url=item.get("link", ""),
-                    title=item.get("title"),
-                    snippet=item.get("snippet"),
-                    source="serpapi",
-                )
+        while len(results.results) < max_results:
+            resp = requests.get(
+                "https://serpapi.com/search",
+                params={
+                    "q": query,
+                    "api_key": SERPAPI_KEY,
+                    "engine": "google",
+                    "num": page_size,
+                    "start": start,
+                },
+                timeout=30,
             )
+            resp.raise_for_status()
+            data = resp.json()
+
+            batch = data.get("organic_results", [])
+            if not batch:
+                break
+
+            for item in batch:
+                results.results.append(
+                    SearchResult(
+                        url=item.get("link", ""),
+                        title=item.get("title"),
+                        snippet=item.get("snippet"),
+                        source="serpapi",
+                    )
+                )
+
+            if len(batch) < page_size:
+                break  # Google has no more results
+
+            start += page_size
+            time.sleep(0.5)
+
         results.total = len(results.results)
     except Exception as exc:
         logger.error("SerpAPI search failed: %s", exc)
@@ -128,37 +163,27 @@ def search_bing(query: str, max_results: int = 20) -> SearchResults:
 
 
 def search_duckduckgo(query: str, max_results: int = 20) -> SearchResults:
-    """Fallback search using DuckDuckGo HTML results."""
+    """Search using the duckduckgo-search library."""
     results = SearchResults(query=query, mode="duckduckgo")
     try:
-        resp = requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers={"User-Agent": USER_AGENT},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        from ddgs import DDGS
 
-        for result_div in soup.select(".result")[:max_results]:
-            link_tag = result_div.select_one("a.result__a")
-            snippet_tag = result_div.select_one(".result__snippet")
-            if link_tag and link_tag.get("href"):
-                url = link_tag["href"]
-                if url.startswith("//duckduckgo.com/l/?"):
-                    match = re.search(r"uddg=([^&]+)", url)
-                    if match:
-                        from urllib.parse import unquote
-
-                        url = unquote(match.group(1))
+        items = DDGS().text(query, max_results=max_results)
+        if items:
+            for item in items:
                 results.results.append(
                     SearchResult(
-                        url=url,
-                        title=link_tag.get_text(strip=True),
-                        snippet=snippet_tag.get_text(strip=True) if snippet_tag else None,
+                        url=item.get("href", ""),
+                        title=item.get("title"),
+                        snippet=item.get("body"),
                         source="duckduckgo",
                     )
                 )
+        else:
+            results.errors.append(
+                f"DuckDuckGo returned 0 results for query: {query!r} — "
+                "possible rate limit; wait a moment and try again"
+            )
         results.total = len(results.results)
         time.sleep(RATE_LIMIT_DELAY)
     except Exception as exc:
@@ -181,22 +206,44 @@ def search_web(
     Perform web search using available providers in priority order:
     SerpAPI -> Bing -> DuckDuckGo.
     """
-    full_query = _build_search_query(
-        query, grant_program, project_type, state, file_types, target_domain
+    api_query = _build_search_query(
+        query, grant_program, project_type, state, file_types, target_domain,
+        include_filetype_operators=True,
     )
-    logger.info("Searching web: %s", full_query)
+    ddg_query = _build_search_query(
+        query, grant_program, project_type, state, file_types, target_domain,
+        include_filetype_operators=False,
+    )
+    logger.info("Searching web: %s", api_query)
 
     if SERPAPI_KEY:
-        results = search_serpapi(full_query, max_results)
+        results = search_serpapi(api_query, max_results)
         if results.results:
+            results.results = _sort_results(results.results)
             return results
 
     if BING_SEARCH_API_KEY:
-        results = search_bing(full_query, max_results)
+        results = search_bing(api_query, max_results)
         if results.results:
+            results.results = _sort_results(results.results)
             return results
 
-    return search_duckduckgo(full_query, max_results)
+    results = search_duckduckgo(ddg_query, max_results)
+    results.results = _sort_results(results.results)
+    return results
+
+
+_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".xlsm"}
+
+
+def _is_document_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return any(path.endswith(ext) for ext in _DOCUMENT_EXTENSIONS)
+
+
+def _sort_results(results: list[SearchResult]) -> list[SearchResult]:
+    """Put direct document URLs first, HTML pages second."""
+    return sorted(results, key=lambda r: (0 if _is_document_url(r.url) else 1))
 
 
 def parse_direct_urls(url_text: str) -> list[SearchResult]:

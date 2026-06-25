@@ -78,6 +78,7 @@ def crawl_website(
     robots = RobotsChecker()
 
     visited: set[str] = set()
+    added_to_results: set[str] = set()
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
@@ -106,9 +107,11 @@ def crawl_website(
         content_type = resp.headers.get("Content-Type", "").lower()
 
         if _is_document_url(url) or "application/pdf" in content_type:
-            results.results.append(
-                SearchResult(url=url, title=urlparse(url).path.split("/")[-1], source="crawl")
-            )
+            if url not in added_to_results:
+                added_to_results.add(url)
+                results.results.append(
+                    SearchResult(url=url, title=urlparse(url).path.split("/")[-1], source="crawl")
+                )
             time.sleep(RATE_LIMIT_DELAY)
             continue
 
@@ -117,7 +120,8 @@ def crawl_website(
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        if _link_matches_keywords(url, soup.get_text()[:500]):
+        if _link_matches_keywords(url, soup.get_text()[:500]) and url not in added_to_results:
+            added_to_results.add(url)
             results.results.append(
                 SearchResult(
                     url=url,
@@ -136,15 +140,15 @@ def crawl_website(
             if not _is_same_domain(absolute, target_domain):
                 continue
             link_text = link.get_text(strip=True)
-            if _is_document_url(absolute) or _link_matches_keywords(absolute, link_text):
-                if absolute not in visited:
-                    results.results.append(
-                        SearchResult(
-                            url=absolute,
-                            title=link_text or urlparse(absolute).path.split("/")[-1],
-                            source="crawl",
-                        )
+            if (_is_document_url(absolute) or _link_matches_keywords(absolute, link_text)) and absolute not in added_to_results:
+                added_to_results.add(absolute)
+                results.results.append(
+                    SearchResult(
+                        url=absolute,
+                        title=link_text or urlparse(absolute).path.split("/")[-1],
+                        source="crawl",
                     )
+                )
             if absolute not in visited and depth + 1 <= max_depth:
                 queue.append((absolute, depth + 1))
 
