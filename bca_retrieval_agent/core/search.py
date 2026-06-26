@@ -201,19 +201,26 @@ def search_web(
     state: Optional[str] = None,
     file_types: Optional[list[str]] = None,
     target_domain: Optional[str] = None,
+    raw: bool = False,
 ) -> SearchResults:
     """
     Perform web search using available providers in priority order:
     SerpAPI -> Bing -> DuckDuckGo.
+
+    Set raw=True to skip BCA-specific query augmentation (used by project research).
     """
-    api_query = _build_search_query(
-        query, grant_program, project_type, state, file_types, target_domain,
-        include_filetype_operators=True,
-    )
-    ddg_query = _build_search_query(
-        query, grant_program, project_type, state, file_types, target_domain,
-        include_filetype_operators=False,
-    )
+    if raw:
+        api_query = query
+        ddg_query = query
+    else:
+        api_query = _build_search_query(
+            query, grant_program, project_type, state, file_types, target_domain,
+            include_filetype_operators=True,
+        )
+        ddg_query = _build_search_query(
+            query, grant_program, project_type, state, file_types, target_domain,
+            include_filetype_operators=False,
+        )
     logger.info("Searching web: %s", api_query)
 
     if SERPAPI_KEY:

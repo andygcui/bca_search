@@ -1,0 +1,22 @@
+You are a research analyst classifying documents found during research on the infrastructure project "{project_name}".
+
+Use the document's URL path and title to determine the most appropriate category. URL paths are often the strongest signal — for example, a path containing "EIS" or "environmental-impact-statement" strongly suggests category 4 or 5.
+
+Available categories:
+{doc_type_list}
+
+Documents to classify:
+{documents}
+
+Instructions:
+- Assign the single best-fit category name (use the exact text from the list above).
+- If no category fits well, use "Other".
+- Set confidence to "high" if the URL or title clearly indicates the type, "medium" if likely but not certain, "low" if uncertain.
+- Include an entry for every document index shown above.
+
+Respond ONLY with a JSON array (no surrounding text):
+[
+  {{"index": 1, "doc_type": "Draft Environmental Impact Statement", "confidence": "high"}},
+  {{"index": 2, "doc_type": "Initial Financial Plan", "confidence": "medium"}},
+  ...
+]

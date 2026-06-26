@@ -118,7 +118,10 @@ with st.sidebar:
 
 def _render_project_research():
     st.header("Project Research")
-    st.markdown("Enter an infrastructure project name to research costs, schedule, funding, and more from public sources.")
+    st.markdown(
+        "Enter an infrastructure project name to discover and classify official documents "
+        "from live government sources and the Wayback Machine (archive.org)."
+    )
 
     proj_col1, proj_col2 = st.columns([2, 1])
     with proj_col1:
@@ -136,89 +139,124 @@ def _render_project_research():
         if not project_name.strip():
             st.error("Please enter a project name.")
         else:
-            with st.spinner(f"Researching '{project_name}'... this may take a minute."):
-                agent = ProjectResearchAgent()
-                result = agent.research(
-                    project_name=project_name.strip(),
-                    location=location_hint.strip(),
-                    sponsor=sponsor_hint.strip(),
-                )
-                st.session_state.project_result = result
+            with st.spinner(
+                f"Researching '{project_name}'... searching live sources and archive.org timelines. "
+                "This may take 2–4 minutes."
+            ):
+                try:
+                    agent = ProjectResearchAgent()
+                    result = agent.research(
+                        project_name=project_name.strip(),
+                        location=location_hint.strip(),
+                        sponsor=sponsor_hint.strip(),
+                    )
+                    st.session_state.project_result = result
+                except Exception as exc:
+                    logger.exception("Project research failed")
+                    st.error(f"Research failed: {exc}")
 
     result = st.session_state.project_result
-    if result and not hasattr(result, "tifia"):
+    # Invalidate stale results from the old schema (had a `tifia` field)
+    if result and hasattr(result, "tifia"):
         st.session_state.project_result = None
         result = None
     if not result:
         st.info("Enter a project name and click Research Project to begin.")
         return
 
+    # ------------------------------------------------------------------
+    # Summary metrics
+    # ------------------------------------------------------------------
+    from config import PROJECT_DOCUMENT_TYPES
+
     st.divider()
     st.subheader(f"Results: {result.project_name}")
-    if result.aliases:
-        st.caption(f"Also known as: {', '.join(result.aliases)}")
 
-    if not result.llm_verified:
-        st.warning("No LLM API configured — showing raw search sources only. Add an Anthropic or OpenAI key for AI-synthesized results.")
+    docs = result.found_documents
+    categories_found = {d.doc_type for d in docs if d.doc_type != "Other"}
+    live_count = sum(1 for d in docs if d.source == "live")
+    archive_count = sum(1 for d in docs if d.source == "archive")
 
-    if result.inconsistencies:
-        with st.expander(f"⚠️ {len(result.inconsistencies)} inconsistency(ies) found across sources", expanded=True):
-            for inc in result.inconsistencies:
-                st.warning(inc)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Documents Found", len(docs))
+    m2.metric("Categories Covered", f"{len(categories_found)}/{len(PROJECT_DOCUMENT_TYPES) - 1}")
+    m3.metric("Live Web", live_count)
+    m4.metric("Archive.org", archive_count)
+    m5.metric("Snapshots Checked", result.archive_snapshots_checked)
 
-    def _field_row(label: str, field, is_extra: bool = False):
-        if field.value or is_extra is False:
-            badge = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(field.confidence, "⚪")
-            cols = st.columns([2, 4, 1, 3])
-            cols[0].markdown(f"**{label}**")
-            cols[1].write(field.value or "—")
-            cols[2].write(badge)
-            if field.sources:
-                with cols[3]:
-                    for s in field.sources:
-                        short = s.url[:50] + "..." if len(s.url) > 50 else s.url
-                        tag = f" `{s.doc_type}`" if s.doc_type else ""
-                        st.markdown(f"[{short}]({s.url}){tag}")
-            else:
-                cols[3].write("—")
-
-    st.markdown("#### Standard Project Fields")
-    header_cols = st.columns([2, 4, 1, 3])
-    header_cols[0].markdown("**Field**")
-    header_cols[1].markdown("**Value**")
-    header_cols[2].markdown("**Conf.**")
-    header_cols[3].markdown("**Source(s)**")
+    # ------------------------------------------------------------------
+    # Coverage grid — all 34 categories
+    # ------------------------------------------------------------------
     st.divider()
+    st.markdown("#### Coverage by Document Category")
+    st.caption("Shows all categories — empty rows indicate gaps in available documentation.")
 
-    _field_row("Location", result.location)
-    _field_row("Description", result.description)
-    _field_row("Cost Estimate (Current)", result.cost_estimate_current)
-    _field_row("Cost Estimate (Prior Year)", result.cost_estimate_prior_year)
-    _field_row("Completion Date (Current)", result.schedule_completion_current)
-    _field_row("Completion Date (Baseline)", result.schedule_completion_baseline)
-    _field_row("Project Sponsor", result.project_sponsor)
-    _field_row("Federal Funds", result.federal_funds)
-    _field_row("State Funds", result.state_funds)
-    _field_row("Local Funds", result.local_funds)
-    _field_row("Toll Funds", result.toll_funds)
-    _field_row("TIFIA Funds", result.tifia)
-    _field_row("Total Funding", result.total_funding)
+    # Build a lookup: doc_type → list of docs
+    from collections import defaultdict
+    by_type: dict[str, list] = defaultdict(list)
+    for d in docs:
+        by_type[d.doc_type].append(d)
 
-    st.markdown("#### Additional Data")
-    _field_row("Project Type", result.project_type)
-    _field_row("Total Length", result.total_length)
-    _field_row("Grant Programs", result.grant_programs)
-    _field_row("Environmental Status", result.environmental_status)
-    _field_row("Key Milestones", result.key_milestones)
-    _field_row("Economic Info", result.economic_info)
-    _field_row("Additional Notes", result.additional_relevant_info)
+    conf_badge = {"high": "🟢", "medium": "🟡", "low": "🔴"}
+    source_badge = {"live": "🌐", "archive": "🕐"}
 
-    if result.archive_sources:
-        st.markdown("#### Archive.org Sources")
-        for url in result.archive_sources:
-            st.markdown(f"- [{url}]({url})")
+    for doc_type in PROJECT_DOCUMENT_TYPES:
+        type_docs = by_type.get(doc_type, [])
+        found = bool(type_docs)
+        label = f"{'✅' if found else '⬜'} **{doc_type}**"
+        count_str = f"({len(type_docs)} doc{'s' if len(type_docs) != 1 else ''})" if found else ""
 
-    with st.expander(f"All URLs searched ({len(result.sources_searched)})"):
+        with st.expander(f"{label} {count_str}", expanded=False):
+            if not type_docs:
+                st.caption("No documents found for this category.")
+            else:
+                for d in type_docs:
+                    src = source_badge.get(d.source, "")
+                    conf = conf_badge.get(d.confidence, "⚪")
+                    ts_str = ""
+                    if d.archive_timestamp and len(d.archive_timestamp) >= 8:
+                        ts_str = f" · archived {d.archive_timestamp[:4]}-{d.archive_timestamp[4:6]}-{d.archive_timestamp[6:8]}"
+
+                    title_display = d.title if d.title else d.url.split("/")[-1] or d.url
+                    access_url = d.wayback_url if d.source == "archive" and d.wayback_url else d.url
+
+                    st.markdown(
+                        f"{src} {conf} [{title_display}]({access_url}){ts_str}  \n"
+                        f"<small style='color:grey'>{d.url}</small>",
+                        unsafe_allow_html=True,
+                    )
+
+    # ------------------------------------------------------------------
+    # Full document table (exportable)
+    # ------------------------------------------------------------------
+    if docs:
+        st.divider()
+        st.markdown("#### All Found Documents")
+        rows = []
+        for d in docs:
+            rows.append({
+                "Category": d.doc_type,
+                "Title": d.title or "",
+                "Source": d.source,
+                "Confidence": d.confidence,
+                "Archived": d.archive_timestamp[:8] if d.archive_timestamp else "",
+                "URL": d.wayback_url if d.source == "archive" and d.wayback_url else d.url,
+            })
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True)
+
+        csv_bytes = df.to_csv(index=False).encode()
+        st.download_button(
+            "📥 Download CSV",
+            data=csv_bytes,
+            file_name=f"{result.project_name.replace(' ', '_')}_documents.csv",
+            mime="text/csv",
+        )
+
+    # ------------------------------------------------------------------
+    # Sources searched
+    # ------------------------------------------------------------------
+    with st.expander(f"Web pages searched ({len(result.sources_searched)})"):
         for url in result.sources_searched:
             st.markdown(f"- [{url}]({url})")
 
